@@ -233,9 +233,12 @@ export default function Globe({
         color: 0xffe9b0,
         transparent: true,
         opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
       });
       const line = new THREE.Line(geo, mat);
       line.frustumCulled = false;
+      line.renderOrder = 10; // always draw arcs above the globe
       line.visible = false;
       globeGroup.add(line);
 
