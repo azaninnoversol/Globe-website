@@ -5,55 +5,29 @@ import * as THREE from "three";
 
 type City = { name: string; lat: number; lon: number };
 
+/** Fewer cities, widely spaced across the globe */
 const CITIES: City[] = [
   { name: "Karachi", lat: 24.86, lon: 67.0 }, // 0
-  { name: "Dubai", lat: 25.2, lon: 55.27 }, // 1
-  { name: "London", lat: 51.5, lon: -0.12 }, // 2
-  { name: "New York", lat: 40.71, lon: -74.0 }, // 3
-  { name: "Singapore", lat: 1.35, lon: 103.82 }, // 4
-  { name: "Lagos", lat: 6.52, lon: 3.38 }, // 5
-  { name: "Manila", lat: 14.6, lon: 120.98 }, // 6
-  { name: "Jakarta", lat: -6.2, lon: 106.85 }, // 7
-  { name: "São Paulo", lat: -23.55, lon: -46.63 }, // 8
-  { name: "Vilnius", lat: 54.68, lon: 25.28 }, // 9
-  { name: "Mumbai", lat: 19.07, lon: 72.87 }, // 10
-  { name: "Bangkok", lat: 13.75, lon: 100.5 }, // 11
-  { name: "Tokyo", lat: 35.68, lon: 139.69 }, // 12
-  { name: "Sydney", lat: -33.87, lon: 151.21 }, // 13
-  { name: "Los Angeles", lat: 34.05, lon: -118.24 }, // 14
-  { name: "Toronto", lat: 43.65, lon: -79.38 }, // 15
-  { name: "Cape Town", lat: -33.92, lon: 18.42 }, // 16
-  { name: "Mexico City", lat: 19.43, lon: -99.13 }, // 17
-  { name: "Istanbul", lat: 41.01, lon: 28.98 }, // 18
-  { name: "Hong Kong", lat: 22.32, lon: 114.17 }, // 19
-  { name: "Buenos Aires", lat: -34.6, lon: -58.38 }, // 20
-  { name: "Nairobi", lat: -1.29, lon: 36.82 }, // 21
-  { name: "Seoul", lat: 37.57, lon: 126.98 }, // 22
-  { name: "Riyadh", lat: 24.71, lon: 46.68 }, // 23
+  { name: "New York", lat: 40.71, lon: -74.0 }, // 1
+  { name: "Tokyo", lat: 35.68, lon: 139.69 }, // 2
+  { name: "São Paulo", lat: -23.55, lon: -46.63 }, // 3
+  { name: "London", lat: 51.5, lon: -0.12 }, // 4
+  { name: "Sydney", lat: -33.87, lon: 151.21 }, // 5
+  { name: "Lagos", lat: 6.52, lon: 3.38 }, // 6
+  { name: "Los Angeles", lat: 34.05, lon: -118.24 }, // 7
 ];
 
-// Long-haul chain — distant city → distant city, then restart
+/** Long-haul jumps only — big gaps between hops */
 const ROUTE_CHAIN: number[] = [
   0, // Karachi
-  3, // → New York
-  12, // → Tokyo
-  8, // → São Paulo
-  4, // → Singapore
-  2, // → London
-  13, // → Sydney
-  14, // → Los Angeles
-  10, // → Mumbai
-  15, // → Toronto
-  19, // → Hong Kong
-  16, // → Cape Town
-  22, // → Seoul
-  20, // → Buenos Aires
-  1, // → Dubai
-  17, // → Mexico City
-  6, // → Manila
-  5, // → Lagos
-  18, // → Istanbul
-  21, // → Nairobi
+  1, // → New York
+  2, // → Tokyo
+  3, // → São Paulo
+  4, // → London
+  5, // → Sydney
+  6, // → Lagos
+  7, // → Los Angeles
+  0, // → Karachi
 ];
 
 function latLonToVec3(lat: number, lon: number, radius: number) {
@@ -204,6 +178,7 @@ export default function Globe({
 
     // ---------- Arcs: continuous chain (gated by arcsEnabled) ----------
     const ARC_SEGMENTS = 60;
+    const ARC_LIFT = 0.12;
 
     type Arc = {
       fullPoints: THREE.Vector3[];
@@ -216,14 +191,20 @@ export default function Globe({
       arc: Arc;
       line: THREE.Line;
     } {
-      const start = latLonToVec3(startCity.lat, startCity.lon, GLOBE_R + 0.02);
-      const end = latLonToVec3(endCity.lat, endCity.lon, GLOBE_R + 0.02);
+      // Arcs live on globeGroup → they rotate with Earth + city points
+      const start = latLonToVec3(startCity.lat, startCity.lon, GLOBE_R + ARC_LIFT);
+      const end = latLonToVec3(endCity.lat, endCity.lon, GLOBE_R + ARC_LIFT);
       const mid = start.clone().add(end).multiplyScalar(0.5);
       const dist = start.distanceTo(end);
-      mid.normalize().multiplyScalar(GLOBE_R + 0.6 + dist * 0.35);
+      // Higher peak so long-haul arcs clear the surface at the horizon
+      mid.normalize().multiplyScalar(GLOBE_R + 1.1 + dist * 0.45);
 
       const curve = new THREE.QuadraticBezierCurve3(start, mid, end);
-      const fullPoints = curve.getPoints(ARC_SEGMENTS);
+      const fullPoints = curve.getPoints(ARC_SEGMENTS).map((p) => {
+        const minR = GLOBE_R + ARC_LIFT;
+        if (p.length() < minR) p.multiplyScalar(minR / p.length());
+        return p;
+      });
 
       const geo = new THREE.BufferGeometry();
       const posAttr = new Float32Array((ARC_SEGMENTS + 1) * 3);
@@ -233,12 +214,10 @@ export default function Globe({
         color: 0xffe9b0,
         transparent: true,
         opacity: 0.95,
-        depthTest: false,
-        depthWrite: false,
+        // depthTest ON → arcs hide behind Earth and stay glued to city points
       });
       const line = new THREE.Line(geo, mat);
       line.frustumCulled = false;
-      line.renderOrder = 10; // always draw arcs above the globe
       line.visible = false;
       globeGroup.add(line);
 
@@ -257,9 +236,12 @@ export default function Globe({
       arcLines.push(line);
     }
 
-    const SEGMENT_DURATION = 1.25;
-    const HOLD_FULL = 2.0;
-    const FADE_ALL = 1.2;
+    // 1→2 draw, wait 1s, 2→3 draw, wait 1s, …
+    const DRAW_DURATION = 0.9;
+    const WAIT_BETWEEN = 1.0;
+    const SEGMENT_DURATION = DRAW_DURATION + WAIT_BETWEEN;
+    const HOLD_FULL = 1.5;
+    const FADE_ALL = 1.0;
     const DRAW_PHASE = SEGMENT_DURATION * arcs.length;
     const MASTER_CYCLE = DRAW_PHASE + HOLD_FULL + FADE_ALL;
 
@@ -340,9 +322,16 @@ export default function Globe({
         });
 
         if (cycleT < DRAW_PHASE) {
-          const activeIndex = Math.floor(cycleT / SEGMENT_DURATION);
+          const activeIndex = Math.min(
+            arcs.length - 1,
+            Math.floor(cycleT / SEGMENT_DURATION)
+          );
           const localT = cycleT - activeIndex * SEGMENT_DURATION;
-          const progress = Math.min(1, localT / SEGMENT_DURATION);
+          // Draw, then hold 1s before next hop starts
+          const progress =
+            localT < DRAW_DURATION
+              ? Math.min(1, localT / DRAW_DURATION)
+              : 1;
 
           arcs.forEach((a) => {
             const total = a.fullPoints.length;
